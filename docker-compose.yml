@@ -1,0 +1,31 @@
+services:
+  bot:
+    build: .
+    restart: always
+    env_file:
+      - ./.env
+    depends_on:
+      - db
+    volumes:
+      - ./:/app
+    networks:
+      - illuminat-network
+
+  db:
+    image: postgres:latest
+    restart: always
+    env_file:
+      - ./.env
+    volumes:
+      - postgres_data:/var/lib/postgres/postgres_data
+      - postgres_backup:/var/lib/postgres/postgres_backup
+    networks:
+      - illuminat-network
+
+volumes:
+  postgres_data:
+  postgres_backup:
+
+networks:
+  illuminat-network:
+    driver: bridge
