@@ -51,6 +51,20 @@ class Database:
             await session.commit()
             return True
 
+    async def delete_business_type(self, business_id: int) -> str:
+        async with get_session() as session:
+            business_to_delete = await session.get(Business, business_id)
+            if not business_to_delete:
+                return 'not_found'
+
+            owned_count = await self.count_owned_businesses(business_id)
+            if owned_count > 0:
+                return 'is_owned'
+
+            await session.delete(business_to_delete)
+            await session.commit()
+            return 'success'
+
     async def get_all_businesses(self):
         async with get_session() as session:
             result = await session.execute(select(Business))

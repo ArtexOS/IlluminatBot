@@ -275,6 +275,8 @@ class Economy(commands.Cog):
         log_embed.add_field(name="Продавец", value=inter.user.mention).add_field(name="Бизнес", value=business_info.name).add_field(name="Выручка", value=f"`{sell_price:,}` 🪙")
         await self.send_log(log_embed)
 
+    # ---------- Админ-команды ----------
+
     @app_commands.command(name="выдать_деньги", description="👑 (Админ) Выдать деньги пользователю.")
     @app_commands.checks.has_role(ADMIN_ROLE_ID)
     @app_commands.describe(пользователь="Кому выдать деньги.", сумма="Сколько денег выдать.", куда="Куда зачислить средства: на руки или в банк.")
@@ -320,6 +322,32 @@ class Economy(commands.Cog):
         log_embed = discord.Embed(title="📝 Лог: Админ | Добавлен бизнес", color=0x71368a)
         log_embed.add_field(name="Администратор", value=inter.user.mention).add_field(name="Название", value=название).add_field(name="Цена", value=f"`{цена:,}` 🪙").add_field(name="Доход", value=f"`{доход:,}` 🪙").add_field(name="Лимит", value=str(количество))
         await self.send_log(log_embed)
+
+    @app_commands.command(name="удалить_бизнес", description="👑 (Админ) Полностью удаляет тип бизнеса из магазина.")
+    @app_commands.checks.has_role(ADMIN_ROLE_ID)
+    @app_commands.describe(id="ID бизнеса, который нужно удалить из команды /бизнес")
+    async def delete_business(self, inter: discord.Interaction, id: int):
+        business = await self.db.get_business_by_id(id)
+        business_name = business.name if business else f"ID: {id}"
+
+        result = await self.db.delete_business_type(id)
+
+        if result == 'not_found':
+            return await inter.response.send_message(f"🚫 Бизнес с ID `{id}` не найден.", ephemeral=True)
+
+        if result == 'is_owned':
+            return await inter.response.send_message(
+                f"🚫 Нельзя удалить этот бизнес, так как им уже владеют пользователи. Сначала они должны его продать.",
+                ephemeral=True)
+
+        if result == 'success':
+            await inter.response.send_message(f"✅ Бизнес «{business_name}» был успешно удален из магазина.",
+                                              ephemeral=True)
+
+            log_embed = discord.Embed(title="📝 Лог: Админ | Бизнес удален", color=0x992d22)
+            log_embed.add_field(name="Администратор", value=inter.user.mention)
+            log_embed.add_field(name="Удаленный бизнес", value=business_name)
+            await self.send_log(log_embed)
 
     @commands.Cog.listener()
     async def on_app_command_error(self, inter: discord.Interaction, error):
