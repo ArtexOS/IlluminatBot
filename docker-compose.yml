@@ -17,8 +17,8 @@ services:
     env_file:
       - ./.env
     volumes:
-      - postgres_data:/var/lib/postgres/postgres_data
-      - postgres_backup:/var/lib/postgres/postgres_backup
+      - postgres_data:/var/lib/postgres/data
+      - postgres_backup:/backups
     networks:
       - illuminat-network
 
