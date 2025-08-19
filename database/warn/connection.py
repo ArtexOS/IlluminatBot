@@ -13,7 +13,7 @@ DATABASE_URL = os.getenv(
 )
 
 # Создаём движок
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(DATABASE_URL, echo=False)
 
 # Создаём фабрику сессий, через которую делаются запросы.
 async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
