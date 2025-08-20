@@ -14,8 +14,13 @@ class RankDatabase:
             user = result.scalar_one_or_none()
 
             if not user:
-                user = RankUser(user_id=user_id)
+                user = RankUser(user_id=user_id, level=0, xp=0)
                 session.add(user)
+
+            if user.xp is None:
+                user.xp = 0
+            if user.level is None:
+                user.level = 0
 
             user.xp += xp_to_add
 
@@ -37,7 +42,7 @@ class RankDatabase:
             result = await session.execute(select(RankUser).filter_by(user_id=user_id))
             user = result.scalar_one_or_none()
             if not user:
-                user = RankUser(user_id=user_id)
+                user = RankUser(user_id=user_id, level=0, xp=0)
                 session.add(user)
 
             if level is not None:
