@@ -1,4 +1,6 @@
 discord.py
-sqlalchemy
-asyncpg
 dotenv
+asyncpg
+sqlalchemy
+openai
+httpx
