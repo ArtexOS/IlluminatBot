@@ -45,7 +45,7 @@ class IlluminatBot(commands.Bot):
 
 async def main():
     bot = IlluminatBot()
-    await bot.start(os.getenv("TEST_BOT_TOKEN"))
+    await bot.start(os.getenv("BOT_TOKEN"))
 
 if __name__ == "__main__":
     asyncio.run(main())

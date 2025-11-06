@@ -2,22 +2,21 @@ import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord.ui import Button, View, Modal, TextInput
+from discord.ui import Button, View, TextInput
 import random
 
-# --- КОНСТАНТЫ ---
-MEMBER_ROLE_ID = 1405996768876822539 # ID роли, которую выдавать после верификации
+# --- НАСТРОЙКИ ---
+MEMBER_ROLE_ID = 1405996768876822539  # ID роли, которую бот выдаёт после проверки
 
 logger = logging.getLogger(__name__)
 
 class VerificationModal(discord.ui.Modal):
     def __init__(self, correct_number: int):
-        super().__init__(title="🔮 Тайный код Иллюмината")
+        super().__init__(title="Проверка")
         self.correct_number = correct_number
 
         self.code_input = TextInput(
-            label=f"Введите священный код: {self.correct_number}",
-            placeholder="✦ 4-значный таинственный код ✦",
+            label=f"Введите {self.correct_number}",
             style=discord.TextStyle.short,
             min_length=4,
             max_length=4,
@@ -27,44 +26,44 @@ class VerificationModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            user_input = self.code_input.value
+            user_input = self.code_input.value.strip()
             if not user_input.isdigit():
-                await interaction.response.send_message("❌ Код должен состоять из цифр.", ephemeral=True)
+                await interaction.response.send_message("❌ Код должен состоять только из цифр.", ephemeral=True)
                 return
 
             if int(user_input) == self.correct_number:
                 role = interaction.guild.get_role(MEMBER_ROLE_ID)
                 if role:
                     await interaction.user.add_roles(role)
-                    await interaction.response.send_message("✨ Вы приняты в Орден Иллюмината! Добро пожаловать.", ephemeral=True)
-                    logger.info(f"{interaction.user} успешно прошёл верификацию.")
+                    await interaction.response.send_message("✅ Проверка пройдена! Роль выдана.", ephemeral=True)
+                    logger.info(f"{interaction.user} успешно прошёл проверку.")
                 else:
-                    await interaction.response.send_message("⚠️ Роль таинственного члена не найдена. Свяжитесь с Верховным Светочем.", ephemeral=True)
-                    logger.error(f"Роль с ID {MEMBER_ROLE_ID} не найдена при выдаче.")
+                    await interaction.response.send_message("⚠️ Роль не найдена. Обратитесь к администратору.", ephemeral=True)
+                    logger.error(f"Роль с ID {MEMBER_ROLE_ID} не найдена.")
             else:
-                await interaction.response.send_message("❌ Код неверен. Тени не пустят вас внутрь.", ephemeral=True)
+                await interaction.response.send_message("❌ Неверный код. Попробуйте ещё раз.", ephemeral=True)
                 logger.warning(f"{interaction.user} ввёл неверный код: {user_input}")
 
         except Exception as e:
-            logger.error(f"Ошибка в модалке верификации: {e}", exc_info=True)
-            await interaction.response.send_message("⚡ Произошла магическая ошибка. Попробуйте ещё раз.", ephemeral=True)
+            logger.error(f"Ошибка в модалке проверки: {e}", exc_info=True)
+            await interaction.response.send_message("⚡ Произошла ошибка. Попробуйте позже.", ephemeral=True)
 
 
 class VerifyView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Начать ритуал верификации", style=discord.ButtonStyle.gray, emoji="🕯️", custom_id="verify_button")
+    @discord.ui.button(label="Пройти проверку", style=discord.ButtonStyle.gray, emoji="✅", custom_id="verify_button")
     async def verify_button(self, interaction: discord.Interaction, button: Button):
         try:
-            verification_role = interaction.guild.get_role(MEMBER_ROLE_ID)
-            if not verification_role:
-                logger.error(f"Роль для верификации с ID {MEMBER_ROLE_ID} не найдена!")
-                await interaction.response.send_message("⚠️ Ошибка магии. Свяжитесь с Верховным Светочем.", ephemeral=True)
+            role = interaction.guild.get_role(MEMBER_ROLE_ID)
+            if not role:
+                logger.error(f"Роль с ID {MEMBER_ROLE_ID} не найдена.")
+                await interaction.response.send_message("⚠️ Ошибка. Роль не найдена.", ephemeral=True)
                 return
 
-            if verification_role in interaction.user.roles:
-                await interaction.response.send_message("🔔 Вы уже инициированы в Орден Иллюмината!", ephemeral=True)
+            if role in interaction.user.roles:
+                await interaction.response.send_message("ℹ️ Вы уже прошли проверку.", ephemeral=True)
                 return
 
             correct_number = random.randint(1000, 9999)
@@ -72,9 +71,9 @@ class VerifyView(View):
             await interaction.response.send_modal(modal)
 
         except Exception as e:
-            logger.error(f"Ошибка при нажатии кнопки верификации: {e}", exc_info=True)
+            logger.error(f"Ошибка при проверке: {e}", exc_info=True)
             if not interaction.response.is_done():
-                await interaction.response.send_message("⚡ Произошла магическая ошибка. Попробуйте позже.", ephemeral=True)
+                await interaction.response.send_message("⚡ Ошибка. Попробуйте позже.", ephemeral=True)
 
 
 class Verify(commands.Cog):
@@ -82,25 +81,25 @@ class Verify(commands.Cog):
         self.bot = bot
         self.bot.add_view(VerifyView())
 
-    @app_commands.command(name="отправить-верификацию", description="Отправляет сообщение для верификации в текущий канал.")
+    @app_commands.command(name="отправить-проверку", description="Отправить сообщение с кнопкой проверки.")
     @app_commands.default_permissions(administrator=True)
     async def send_verify_message(self, inter: discord.Interaction):
         embed = discord.Embed(
-            description="🔐 Добро пожаловать, путник. Чтобы открыть врата Ордена, необходимо пройти ритуал верификации. Нажмите на свечу ниже, чтобы начать тайный процесс.",
-            color=0x393a41
+            description="Чтобы получить доступ к серверу, нажмите кнопку ниже и введите проверочный код.",
+            color=0x292b2f
         )
-        embed.set_footer(text="Если тени мешают вам пройти ритуал, обратитесь к Верховному Светочу.")
+        embed.set_footer(text="Если что-то не работает — обратитесь к администратору.")
 
         try:
-            file = discord.File("images/verify.png", filename="verification.png")
-            embed.set_image(url="attachment://verification.png")
+            file = discord.File("images/verify.png", filename="verify.png")
+            embed.set_image(url="attachment://verify.png")
             await inter.channel.send(embed=embed, view=VerifyView(), file=file)
         except FileNotFoundError:
-            logger.warning("Файл images/verify.png не найден. Сообщение будет отправлено без изображения.")
+            logger.warning("Файл images/verify.png не найден, отправка без изображения.")
             await inter.channel.send(embed=embed, view=VerifyView())
 
-        await inter.response.send_message("✅ Сообщение для верификации отправлено.", ephemeral=True)
-        logger.info(f"Сообщение верификации отправлено в канал {inter.channel.name} администратором {inter.user.name}.")
+        await inter.response.send_message("✅ Сообщение для проверки отправлено.", ephemeral=True)
+        logger.info(f"Сообщение проверки отправлено в {inter.channel.name} пользователем {inter.user}.")
 
 
 async def setup(bot: commands.Bot):

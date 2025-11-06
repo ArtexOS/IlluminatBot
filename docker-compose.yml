@@ -6,8 +6,6 @@ services:
       - ./.env
     depends_on:
       - db
-    volumes:
-      - ./:/app
     networks:
       - illuminat-network
 
