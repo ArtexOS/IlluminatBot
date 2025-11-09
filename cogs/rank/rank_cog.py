@@ -39,7 +39,9 @@ class RankCog(commands.Cog, name="Ранги"):
                 description=f"🎉 **Поздравляем, {message.author.mention}!**\nВы достигли **{user.level}** уровня!",
                 color=discord.Color.green()
             )
-            await message.channel.send(embed=embed)
+            levelup_channel = self.bot.get_channel(1437102750033776800)
+            if levelup_channel:
+                await levelup_channel.send(embed=embed)
 
             log_embed = discord.Embed(
                 title="📝 Лог: Повышение уровня",

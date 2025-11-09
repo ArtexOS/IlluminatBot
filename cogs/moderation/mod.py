@@ -14,6 +14,7 @@ HEAD_MODERATOR_ROLES = ADMIN_ROLES + [1407064998932516874]
 MODERATOR_ROLES = HEAD_MODERATOR_ROLES + [1405996596474417323]
 JR_MODERATOR_ROLES = MODERATOR_ROLES + [1407064791914119219]
 TRAINEE_ROLES = JR_MODERATOR_ROLES + [1407063984921645117]
+ALERT_CHANNEL_ID = 1437102750033776800
 
 
 class Moderation(commands.Cog):
@@ -28,6 +29,20 @@ class Moderation(commands.Cog):
                 await self.log_channel.send(embed=embed)
             except (discord.Forbidden, discord.HTTPException) as e:
                 print(f"ERROR: Could not send log message. {e}")
+
+    async def _send_public_alert(self, text: str):
+        channel = self.bot.get_channel(self.ALERT_CHANNEL_ID)
+        if not channel:
+            try:
+                channel = await self.bot.fetch_channel(self.ALERT_CHANNEL_ID)
+            except discord.NotFound:
+                print(f"⚠️ Канал с ID {self.ALERT_CHANNEL_ID} не найден.")
+                return
+        try:
+            await channel.send(text)
+        except discord.Forbidden:
+            print(f"⚠️ Нет прав для отправки сообщений в канал {self.ALERT_CHANNEL_ID}.")
+
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -56,6 +71,9 @@ class Moderation(commands.Cog):
                               description=f"Модератор {inter.user.mention} выдал предупреждение {участник.mention}\n**Причина:** {причина}",
                               color=discord.Color.orange())
         await inter.response.send_message(embed=embed)
+
+        await self._send_public_alert(f"⚠️ {участник.mention} получил предупреждение! Причина: {причина}")
+
 
         log_embed = discord.Embed(title="📜 Выдано предупреждение", color=discord.Color.orange(),
                                   timestamp=datetime.datetime.now())
@@ -105,6 +123,9 @@ class Moderation(commands.Cog):
         embed = discord.Embed(description=f"✅ Предупреждение с ID `{id}` было успешно удалено.",
                               color=discord.Color.green())
         await inter.response.send_message(embed=embed, ephemeral=True)
+
+        await self._send_public_alert(f"🗑️ Предупреждение с ID `{id}` было снято модератором {inter.user.mention}.")
+
         log_embed = discord.Embed(title="🗑️ Снято предупреждение", color=0x99B873, timestamp=datetime.datetime.now())
         log_embed.add_field(name="ID Предупреждения", value=f"`{id}`", inline=False)
         log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
@@ -135,6 +156,8 @@ class Moderation(commands.Cog):
             print(f"Could not DM user {участник.id} before kicking.")
 
         await участник.kick(reason=f"Модератор: {inter.user.display_name}. Причина: {причина}")
+
+        await self._send_public_alert(f"👢 {участник.mention} был кикнут! Причина: {причина}")
 
         embed = discord.Embed(title="👢 Участник кикнут",
                               description=f"{участник.mention} был кикнут.\n**Причина:** {причина}", color=0xDD742B)
@@ -235,6 +258,8 @@ class Moderation(commands.Cog):
                               color=0x6E6E6E)
         await inter.response.send_message(embed=embed)
 
+        await self._send_public_alert(f"🔊 {участник.mention} был замьючен!")
+
         log_embed = discord.Embed(title="🔇 Мьют", color=0x6E6E6E, timestamp=datetime.datetime.now())
         log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
         log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
@@ -259,6 +284,9 @@ class Moderation(commands.Cog):
         embed = discord.Embed(title="🔊 С участника снят мьют", description=f"С {участник.mention} был снят тайм-аут.",
                               color=0x99B873)
         await inter.response.send_message(embed=embed)
+
+        await self._send_public_alert(f"🔊 {участник.mention} был размьючен!")
+
         log_embed = discord.Embed(title="🔊 Размьют", color=0x99B873, timestamp=datetime.datetime.now())
         log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
         log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)

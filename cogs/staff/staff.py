@@ -231,7 +231,9 @@ class Staff(commands.Cog):
         select_menu.options = [discord.SelectOption(label=r['label'], value=r['value']) for r in roles]
 
         try:
-            await канал.send(embed=embed, view=view)
+            file = discord.File("images/recruitment.png", filename="recruitment.png")
+            embed.set_image(url="attachment://recruitment.png")
+            await канал.send(embed=embed, view=view, file=file)
             await interaction.response.send_message(f"✅ Сообщение для набора отправлено в {канал.mention}.",
                                                     ephemeral=True)
         except discord.Forbidden:
