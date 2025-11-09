@@ -115,7 +115,6 @@ class Moderation(commands.Cog):
             user_id=участник.id,
             moderator_id=inter.user.id,
             reason=причина,
-            start_time=discord.utils.utcnow()
         )
 
         embed = discord.Embed(
