@@ -1,6 +1,8 @@
 import datetime
-import discord
 import re
+from typing import Optional
+
+import discord
 from discord import app_commands
 from discord.ext import commands
 
@@ -21,40 +23,84 @@ class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db = Database()
-        self.log_channel = None
+        self.log_channel: Optional[discord.TextChannel] = None
+        self.alert_channel: Optional[discord.TextChannel] = None
+        self.allowed_mentions = discord.AllowedMentions(users=True, roles=False, everyone=False)
+
+    async def _resolve_channel(self, channel_id: int) -> Optional[discord.TextChannel]:
+        ch = self.bot.get_channel(channel_id)
+        if ch is None:
+            try:
+                ch = await self.bot.fetch_channel(channel_id)  # type: ignore
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return None
+        if isinstance(ch, discord.TextChannel):
+            return ch
+        return None
 
     async def _send_log(self, embed: discord.Embed):
-        if self.log_channel:
-            try:
-                await self.log_channel.send(embed=embed)
-            except (discord.Forbidden, discord.HTTPException) as e:
-                print(f"ERROR: Could not send log message. {e}")
+        if not self.log_channel:
+            return
+        try:
+            await self.log_channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            print(f"ERROR: Could not send log message. {e}")
 
     async def _send_public_alert(self, text: str):
-        channel = self.bot.get_channel(self.ALERT_CHANNEL_ID)
-        if not channel:
-            try:
-                channel = await self.bot.fetch_channel(self.ALERT_CHANNEL_ID)
-            except discord.NotFound:
-                print(f"⚠️ Канал с ID {self.ALERT_CHANNEL_ID} не найден.")
-                return
+        if not self.alert_channel:
+            self.alert_channel = await self._resolve_channel(ALERT_CHANNEL_ID)
+        if not self.alert_channel:
+            print(f"⚠️ Канал с ID {ALERT_CHANNEL_ID} не найден или недоступен.")
+            return
         try:
-            await channel.send(text)
+            await self.alert_channel.send(text, allowed_mentions=self.allowed_mentions)
         except discord.Forbidden:
-            print(f"⚠️ Нет прав для отправки сообщений в канал {self.ALERT_CHANNEL_ID}.")
-
+            print(f"⚠️ Нет прав для отправки сообщений в канал {ALERT_CHANNEL_ID}.")
+        except discord.HTTPException as e:
+            print(f"⚠️ Ошибка при отправке публичного оповещения: {e}")
 
     @commands.Cog.listener()
     async def on_ready(self):
         await create_tables()
-        if LOG_CHANNEL_ID:
-            self.log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
-            if self.log_channel is None:
-                try:
-                    self.log_channel = await self.bot.fetch_channel(LOG_CHANNEL_ID)
-                except (discord.NotFound, discord.Forbidden):
-                    print(f"ERROR: Could not find or access the log channel with ID {LOG_CHANNEL_ID}.")
+        self.log_channel = await self._resolve_channel(LOG_CHANNEL_ID)
+        self.alert_channel = await self._resolve_channel(ALERT_CHANNEL_ID)
         print("Moderation Cog is Ready")
+
+    # ---------- helpers ----------
+
+    def _parse_duration(self, raw: str) -> Optional[datetime.timedelta]:
+        m = re.fullmatch(r"(\d+)\s*([smhdSMHD])", raw.strip())
+        if not m:
+            return None
+        val = int(m.group(1))
+        unit = m.group(2).lower()
+        if unit == "s":
+            return datetime.timedelta(seconds=val)
+        if unit == "m":
+            return datetime.timedelta(minutes=val)
+        if unit == "h":
+            return datetime.timedelta(hours=val)
+        if unit == "d":
+            return datetime.timedelta(days=val)
+        return None
+
+    def _can_act_on(self, inter: discord.Interaction, target: discord.Member) -> Optional[str]:
+        me = inter.guild.me if inter.guild else None  # type: ignore
+        if not inter.guild or not me:
+            return "Команда доступна только на сервере."
+        if target == inter.user:
+            return "Нельзя применить действие к самому себе."
+        if target == me:
+            return "Нельзя применить действие к боту."
+        if inter.user.id == inter.guild.owner_id:
+            return None
+        if target.top_role >= inter.user.top_role:
+            return "У участника равная или более высокая роль."
+        if target.top_role >= me.top_role:
+            return "У участника роль выше роли бота."
+        return None
+
+    # ---------- commands ----------
 
     @app_commands.command(name="пред", description="✔️ Выдать предупреждение участнику")
     @app_commands.checks.has_any_role(*TRAINEE_ROLES)
@@ -65,68 +111,91 @@ class Moderation(commands.Cog):
             await inter.response.send_message(embed=embed, ephemeral=True)
             return
 
-        await self.db.add_warn(user_id=участник.id, moderator_id=inter.user.id, reason=причина,
-                               start_time=datetime.datetime.now())
-        embed = discord.Embed(title="✅ Предупреждение выдано",
-                              description=f"Модератор {inter.user.mention} выдал предупреждение {участник.mention}\n**Причина:** {причина}",
-                              color=discord.Color.orange())
+        await self.db.add_warn(
+            user_id=участник.id,
+            moderator_id=inter.user.id,
+            reason=причина,
+            start_time=discord.utils.utcnow()
+        )
+
+        embed = discord.Embed(
+            title="✅ Предупреждение выдано",
+            description=f"Модератор {inter.user.mention} выдал предупреждение {участник.mention}\n**Причина:** {причина}",
+            color=discord.Color.orange()
+        )
         await inter.response.send_message(embed=embed)
 
-        await self._send_public_alert(f"⚠️ {участник.mention} получил предупреждение! Причина: {причина}")
+        await self._send_public_alert(f"⚠️ {участник.mention} получил предупреждение. Причина: {причина}")
 
-
-        log_embed = discord.Embed(title="📜 Выдано предупреждение", color=discord.Color.orange(),
-                                  timestamp=datetime.datetime.now())
+        log_embed = discord.Embed(
+            title="📜 Выдано предупреждение",
+            color=discord.Color.orange(),
+            timestamp=discord.utils.utcnow()
+        )
         log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
         log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
         log_embed.add_field(name="Причина", value=причина, inline=False)
         await self._send_log(log_embed)
 
         try:
-            dm_embed = discord.Embed(title=f"Вы получили предупреждение на сервере {inter.guild.name}", color=0xFF8C00)
+            dm_embed = discord.Embed(
+                title=f"Вы получили предупреждение на сервере {inter.guild.name}",
+                color=0xFF8C00
+            )
             dm_embed.add_field(name="Причина", value=причина, inline=False)
             dm_embed.set_footer(text=f"Наказание выдал: {inter.user.display_name}")
             await участник.send(embed=dm_embed)
-        except discord.Forbidden:
-            print(f"Could not DM user {участник.id} about their warn.")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
     @app_commands.command(name="преды", description="📜 Посмотреть предупреждения участника")
     @app_commands.checks.has_any_role(*TRAINEE_ROLES)
-    async def warns_cmd(self, inter: discord.Interaction, участник: discord.Member = None):
+    async def warns_cmd(self, inter: discord.Interaction, участник: Optional[discord.Member] = None):
         target_user = участник or inter.user
         await inter.response.defer(ephemeral=True)
         warns = await self.db.get_warns(user_id=target_user.id)
         if not warns:
-            embed = discord.Embed(description=f"✨ У {target_user.mention} нет предупреждений.",
-                                  color=discord.Color.green())
+            embed = discord.Embed(
+                description=f"✨ У {target_user.mention} нет предупреждений.",
+                color=discord.Color.green()
+            )
             await inter.followup.send(embed=embed)
             return
 
-        embed = discord.Embed(title=f"⚠️ Предупреждения {target_user.display_name} ({len(warns)} шт.)",
-                              color=discord.Color.gold())
-        description = []
-        for warn in warns:
-            start_time_formatted = discord.utils.format_dt(warn.start_time, 'R')
-            description.append(
-                f"### 🆔 **ID:** `{warn.id}`\n"
-                f"**Выдан:** {start_time_formatted}\n"
-                f"👮 **Модератор:** <@{warn.moderator_id}>\n"
-                f"💬 **Причина:** {warn.reason}"
+        embed = discord.Embed(
+            title=f"⚠️ Предупреждения {target_user.display_name} ({len(warns)} шт.)",
+            color=discord.Color.gold()
+        )
+
+        parts = []
+        for w in warns:
+            issued = discord.utils.format_dt(w.start_time, 'R') if isinstance(w.start_time, datetime.datetime) else str(w.start_time)
+            parts.append(
+                f"### 🆔 **ID:** `{w.id}`\n"
+                f"**Выдан:** {issued}\n"
+                f"👮 **Модератор:** <@{w.moderator_id}>\n"
+                f"💬 **Причина:** {w.reason}"
             )
-        embed.description = "\n\n".join(description)
+        embed.description = "\n\n".join(parts)
         await inter.followup.send(embed=embed)
 
     @app_commands.command(name="снятьпред", description="🗑️ Снять предупреждение по ID")
     @app_commands.checks.has_any_role(*MODERATOR_ROLES)
     async def unwarn_cmd(self, inter: discord.Interaction, id: int):
         await self.db.remove_warn_by_id(warn_id=id)
-        embed = discord.Embed(description=f"✅ Предупреждение с ID `{id}` было успешно удалено.",
-                              color=discord.Color.green())
-        await inter.response.send_message(embed=embed, ephemeral=True)
-
-        await self._send_public_alert(f"🗑️ Предупреждение с ID `{id}` было снято модератором {inter.user.mention}.")
-
-        log_embed = discord.Embed(title="🗑️ Снято предупреждение", color=0x99B873, timestamp=datetime.datetime.now())
+        await inter.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ Предупреждение с ID `{id}` было успешно удалено.",
+                color=discord.Color.green()
+            ),
+            ephemeral=True
+        )
+        await self._send_public_alert(f"🗑️ Предупреждение с ID `{id}` снято модератором {inter.user.mention}.")
+        log_embed = discord.Embed(
+            title="🗑️ Снято предупреждение",
+            color=0x99B873,
+            timestamp=discord.utils.utcnow()
+        )
         log_embed.add_field(name="ID Предупреждения", value=f"`{id}`", inline=False)
         log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
         await self._send_log(log_embed)
@@ -135,11 +204,17 @@ class Moderation(commands.Cog):
     @app_commands.checks.has_any_role(*HEAD_MODERATOR_ROLES)
     async def clearwarns_cmd(self, inter: discord.Interaction, участник: discord.Member):
         await self.db.remove_all_warns(user_id=участник.id)
-        embed = discord.Embed(description=f"✅ Все предупреждения для {участник.mention} были сняты.",
-                              color=discord.Color.green())
-        await inter.response.send_message(embed=embed)
-        log_embed = discord.Embed(title="🗑️🗑️ Сняты все предупреждения", color=0x99B873,
-                                  timestamp=datetime.datetime.now())
+        await inter.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ Все предупреждения для {участник.mention} были сняты.",
+                color=discord.Color.green()
+            )
+        )
+        log_embed = discord.Embed(
+            title="🗑️🗑️ Сняты все предупреждения",
+            color=0x99B873,
+            timestamp=discord.utils.utcnow()
+        )
         log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
         log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
         await self._send_log(log_embed)
@@ -147,166 +222,283 @@ class Moderation(commands.Cog):
     @app_commands.command(name="кик", description="👢 Кикнуть участника с сервера")
     @app_commands.checks.has_any_role(*MODERATOR_ROLES)
     async def kick_cmd(self, inter: discord.Interaction, участник: discord.Member, причина: str):
+        violation = self._can_act_on(inter, участник)
+        if violation:
+            await inter.response.send_message(
+                embed=discord.Embed(title="❌ Ошибка", description=violation, color=discord.Color.red()),
+                ephemeral=True
+            )
+            return
+
         try:
-            dm_embed = discord.Embed(title=f"Вы были кикнуты с сервера {inter.guild.name}", color=0xFF4500)
-            dm_embed.add_field(name="Причина", value=причина, inline=False)
-            dm_embed.set_footer(text=f"Наказание выдал: {inter.user.display_name}")
-            await участник.send(embed=dm_embed)
+            try:
+                dm_embed = discord.Embed(
+                    title=f"Вы были кикнуты с сервера {inter.guild.name}",
+                    color=0xFF4500
+                )
+                dm_embed.add_field(name="Причина", value=причина, inline=False)
+                dm_embed.set_footer(text=f"Наказание выдал: {inter.user.display_name}")
+                await участник.send(embed=dm_embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+            await участник.kick(reason=f"Модератор: {inter.user.display_name}. Причина: {причина}")
+
+            await self._send_public_alert(f"👢 {участник.mention} был кикнут. Причина: {причина}")
+
+            await inter.response.send_message(
+                embed=discord.Embed(
+                    title="👢 Участник кикнут",
+                    description=f"{участник.mention} был кикнут.\n**Причина:** {причина}",
+                    color=0xDD742B
+                )
+            )
+
+            log_embed = discord.Embed(
+                title="👢 Кик",
+                color=0xDD742B,
+                timestamp=discord.utils.utcnow()
+            )
+            log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
+            log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
+            log_embed.add_field(name="Причина", value=причина, inline=False)
+            await self._send_log(log_embed)
+
         except discord.Forbidden:
-            print(f"Could not DM user {участник.id} before kicking.")
-
-        await участник.kick(reason=f"Модератор: {inter.user.display_name}. Причина: {причина}")
-
-        await self._send_public_alert(f"👢 {участник.mention} был кикнут! Причина: {причина}")
-
-        embed = discord.Embed(title="👢 Участник кикнут",
-                              description=f"{участник.mention} был кикнут.\n**Причина:** {причина}", color=0xDD742B)
-        await inter.response.send_message(embed=embed)
-
-        log_embed = discord.Embed(title="👢 Кик", color=0xDD742B, timestamp=datetime.datetime.now())
-        log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
-        log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
-        log_embed.add_field(name="Причина", value=причина, inline=False)
-        await self._send_log(log_embed)
+            await inter.response.send_message(
+                embed=discord.Embed(title="❌ Ошибка", description="Недостаточно прав для кика.", color=discord.Color.red()),
+                ephemeral=True
+            )
 
     @app_commands.command(name="бан", description="🚫 Забанить участника на сервере")
     @app_commands.checks.has_any_role(*HEAD_MODERATOR_ROLES)
     async def ban_cmd(self, inter: discord.Interaction, участник: discord.Member, причина: str):
+        violation = self._can_act_on(inter, участник)
+        if violation:
+            await inter.response.send_message(
+                embed=discord.Embed(title="❌ Ошибка", description=violation, color=discord.Color.red()),
+                ephemeral=True
+            )
+            return
+
         try:
-            dm_embed = discord.Embed(title=f"Вы были забанены на сервере {inter.guild.name}", color=0xDC143C)
-            dm_embed.add_field(name="Причина", value=причина, inline=False)
-            dm_embed.set_footer(text=f"Наказание выдал: {inter.user.display_name}")
-            await участник.send(embed=dm_embed)
+            try:
+                dm_embed = discord.Embed(
+                    title=f"Вы были забанены на сервере {inter.guild.name}",
+                    color=0xDC143C
+                )
+                dm_embed.add_field(name="Причина", value=причина, inline=False)
+                dm_embed.set_footer(text=f"Наказание выдал: {inter.user.display_name}")
+                await участник.send(embed=dm_embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+            await участник.ban(reason=f"Модератор: {inter.user.display_name}. Причина: {причина}")
+
+            await self._send_public_alert(f"🚫 {участник.mention} был забанен. Причина: {причина}")
+
+            await inter.response.send_message(
+                embed=discord.Embed(
+                    title="🚫 Участник забанен",
+                    description=f"{участник.mention} был забанен.\n**Причина:** {причина}",
+                    color=0xA22C2C
+                )
+            )
+
+            log_embed = discord.Embed(
+                title="🚫 Бан",
+                color=0xA22C2C,
+                timestamp=discord.utils.utcnow()
+            )
+            log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
+            log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
+            log_embed.add_field(name="Причина", value=причина, inline=False)
+            await self._send_log(log_embed)
+
         except discord.Forbidden:
-            print(f"Could not DM user {участник.id} before banning.")
-
-        await участник.ban(reason=f"Модератор: {inter.user.display_name}. Причина: {причина}")
-
-        embed = discord.Embed(title="🚫 Участник забанен",
-                              description=f"{участник.mention} был забанен.\n**Причина:** {причина}", color=0xA22C2C)
-        await inter.response.send_message(embed=embed)
-
-        log_embed = discord.Embed(title="🚫 Бан", color=0xA22C2C, timestamp=datetime.datetime.now())
-        log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
-        log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
-        log_embed.add_field(name="Причина", value=причина, inline=False)
-        await self._send_log(log_embed)
+            await inter.response.send_message(
+                embed=discord.Embed(title="❌ Ошибка", description="Недостаточно прав для бана.", color=discord.Color.red()),
+                ephemeral=True
+            )
 
     @app_commands.command(name="разбан", description="✅ Разбанить участника по ID")
     @app_commands.describe(пользователь_id="ID пользователя, которого нужно разбанить", причина="Причина разбана")
     @app_commands.checks.has_any_role(*HEAD_MODERATOR_ROLES)
     async def unban_cmd(self, inter: discord.Interaction, пользователь_id: str, причина: str = "Не указана"):
         if not пользователь_id.isdigit():
-            embed = discord.Embed(title="❌ Ошибка", description="ID пользователя должен состоять только из цифр.",
-                                  color=discord.Color.red())
-            await inter.response.send_message(embed=embed, ephemeral=True)
+            await inter.response.send_message(
+                embed=discord.Embed(title="❌ Ошибка", description="ID пользователя должен состоять только из цифр.", color=discord.Color.red()),
+                ephemeral=True
+            )
             return
         user_id_int = int(пользователь_id)
         try:
             user = await self.bot.fetch_user(user_id_int)
-            await inter.guild.unban(user, reason=причина)
-            embed = discord.Embed(title="✅ Участник разбанен", description=f"{user.mention} был успешно разбанен.",
-                                  color=discord.Color.green())
-            await inter.response.send_message(embed=embed)
-            log_embed = discord.Embed(title="✅ Разбан", color=discord.Color.green(), timestamp=datetime.datetime.now())
+            await inter.guild.unban(user, reason=причина)  # type: ignore
+            await inter.response.send_message(
+                embed=discord.Embed(
+                    title="✅ Участник разбанен",
+                    description=f"{user.mention} был успешно разбанен.",
+                    color=discord.Color.green()
+                )
+            )
+            log_embed = discord.Embed(
+                title="✅ Разбан",
+                color=discord.Color.green(),
+                timestamp=discord.utils.utcnow()
+            )
             log_embed.add_field(name="Участник", value=f"{user.mention} (`{user.id}`)", inline=False)
             log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
             log_embed.add_field(name="Причина", value=причина, inline=False)
             await self._send_log(log_embed)
         except discord.NotFound:
-            embed = discord.Embed(title="❌ Ошибка",
-                                  description=f"Пользователь с ID `{user_id_int}` не найден в списке забаненных.",
-                                  color=discord.Color.red())
-            await inter.response.send_message(embed=embed, ephemeral=True)
+            await inter.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Ошибка",
+                    description=f"Пользователь с ID `{user_id_int}` не найден в списке забаненных.",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
         except Exception as e:
-            embed = discord.Embed(title="❌ Произошла ошибка", description=f"Не удалось разбанить пользователя. {e}",
-                                  color=discord.Color.red())
-            await inter.response.send_message(embed=embed, ephemeral=True)
+            await inter.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Произошла ошибка",
+                    description=f"Не удалось разбанить пользователя. {e}",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
 
     @app_commands.command(name="мьют", description="🔇 Выдать мьют (тайм-аут) участнику")
     @app_commands.describe(время="Например: 10s, 5m, 3h, 7d", причина="Причина тайм-аута")
     @app_commands.checks.has_any_role(*JR_MODERATOR_ROLES)
     async def mute_cmd(self, inter: discord.Interaction, участник: discord.Member, время: str, причина: str):
-        match = re.match(r"(\d+)\s*([smhd])", время.lower())
-        if not match:
-            embed = discord.Embed(title="❌ Ошибка формата",
-                                  description="Неверный формат времени. Используйте `s`, `m`, `h`, `d`.\n**Пример:** `10m`, `2h`, `7d`",
-                                  color=discord.Color.red())
-            await inter.response.send_message(embed=embed, ephemeral=True)
+        violation = self._can_act_on(inter, участник)
+        if violation:
+            await inter.response.send_message(
+                embed=discord.Embed(title="❌ Ошибка", description=violation, color=discord.Color.red()),
+                ephemeral=True
+            )
             return
 
-        value, unit = int(match.group(1)), match.group(2)
-        duration = None
-        if unit == 's':
-            duration = datetime.timedelta(seconds=value)
-        elif unit == 'm':
-            duration = datetime.timedelta(minutes=value)
-        elif unit == 'h':
-            duration = datetime.timedelta(hours=value)
-        elif unit == 'd':
-            duration = datetime.timedelta(days=value)
+        duration = self._parse_duration(время)
+        if not duration:
+            await inter.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Ошибка формата",
+                    description="Неверный формат времени. Используйте `s`, `m`, `h`, `d`.\n**Пример:** `10m`, `2h`, `7d`",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+            return
 
         if duration > datetime.timedelta(days=28):
-            embed = discord.Embed(title="❌ Ошибка длительности", description="Тайм-аут не может превышать **28 дней**.",
-                                  color=discord.Color.red())
-            await inter.response.send_message(embed=embed, ephemeral=True)
+            await inter.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Ошибка длительности",
+                    description="Тайм-аут не может превышать **28 дней**.",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
             return
 
-        await участник.timeout(duration, reason=причина)
-        embed = discord.Embed(title="🔇 Участнику выдан мьют",
-                              description=f"{участник.mention} получил тайм-аут на **{время}**.\n**Причина:** {причина}",
-                              color=0x6E6E6E)
-        await inter.response.send_message(embed=embed)
-
-        await self._send_public_alert(f"🔊 {участник.mention} был замьючен!")
-
-        log_embed = discord.Embed(title="🔇 Мьют", color=0x6E6E6E, timestamp=datetime.datetime.now())
-        log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
-        log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
-        log_embed.add_field(name="Длительность", value=время, inline=False)
-        log_embed.add_field(name="Причина", value=причина, inline=False)
-        await self._send_log(log_embed)
-
         try:
-            dm_embed = discord.Embed(title=f"Вам был выдан мьют (тайм-аут) на сервере {inter.guild.name}",
-                                     color=0x808080)
-            dm_embed.add_field(name="Длительность", value=время, inline=False)
-            dm_embed.add_field(name="Причина", value=причина, inline=False)
-            dm_embed.set_footer(text=f"Наказание выдал: {inter.user.display_name}")
-            await участник.send(embed=dm_embed)
+            await участник.timeout(duration, reason=причина)
+
+            await inter.response.send_message(
+                embed=discord.Embed(
+                    title="🔇 Участнику выдан мьют",
+                    description=f"{участник.mention} получил тайм-аут на **{время}**.\n**Причина:** {причина}",
+                    color=0x6E6E6E
+                )
+            )
+
+            await self._send_public_alert(f"🔇 {участник.mention} получил мьют на {время}. Причина: {причина}")
+
+            log_embed = discord.Embed(
+                title="🔇 Мьют",
+                color=0x6E6E6E,
+                timestamp=discord.utils.utcnow()
+            )
+            log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
+            log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
+            log_embed.add_field(name="Длительность", value=время, inline=False)
+            log_embed.add_field(name="Причина", value=причина, inline=False)
+            await self._send_log(log_embed)
+
+            try:
+                dm_embed = discord.Embed(
+                    title=f"Вам был выдан мьют (тайм-аут) на сервере {inter.guild.name}",
+                    color=0x808080
+                )
+                dm_embed.add_field(name="Длительность", value=время, inline=False)
+                dm_embed.add_field(name="Причина", value=причина, inline=False)
+                dm_embed.set_footer(text=f"Наказание выдал: {inter.user.display_name}")
+                await участник.send(embed=dm_embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
         except discord.Forbidden:
-            print(f"Could not DM user {участник.id} about their mute.")
+            await inter.response.send_message(
+                embed=discord.Embed(title="❌ Ошибка", description="Недостаточно прав для выдачи мьюта.", color=discord.Color.red()),
+                ephemeral=True
+            )
 
     @app_commands.command(name="размьют", description="🔊 Снять мьют (тайм-аут) с участника")
     @app_commands.checks.has_any_role(*JR_MODERATOR_ROLES)
     async def unmute_cmd(self, inter: discord.Interaction, участник: discord.Member):
-        await участник.timeout(None)
-        embed = discord.Embed(title="🔊 С участника снят мьют", description=f"С {участник.mention} был снят тайм-аут.",
-                              color=0x99B873)
-        await inter.response.send_message(embed=embed)
-
-        await self._send_public_alert(f"🔊 {участник.mention} был размьючен!")
-
-        log_embed = discord.Embed(title="🔊 Размьют", color=0x99B873, timestamp=datetime.datetime.now())
-        log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
-        log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
-        await self._send_log(log_embed)
+        try:
+            await участник.timeout(None)
+            await inter.response.send_message(
+                embed=discord.Embed(
+                    title="🔊 С участника снят мьют",
+                    description=f"С {участник.mention} был снят тайм-аут.",
+                    color=0x99B873
+                )
+            )
+            await self._send_public_alert(f"🔊 {участник.mention} был размьючен.")
+            log_embed = discord.Embed(
+                title="🔊 Размьют",
+                color=0x99B873,
+                timestamp=discord.utils.utcnow()
+            )
+            log_embed.add_field(name="Участник", value=f"{участник.mention} (`{участник.id}`)", inline=False)
+            log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
+            await self._send_log(log_embed)
+        except discord.Forbidden:
+            await inter.response.send_message(
+                embed=discord.Embed(title="❌ Ошибка", description="Недостаточно прав для снятия мьюта.", color=discord.Color.red()),
+                ephemeral=True
+            )
 
     @app_commands.command(name="очистить", description="🧹 Очистить сообщения в чате")
     @app_commands.describe(количество="Сколько сообщений удалить (макс. 100)")
     @app_commands.checks.has_any_role(*JR_MODERATOR_ROLES)
     async def clear_cmd(self, inter: discord.Interaction, количество: app_commands.Range[int, 1, 100]):
         await inter.response.defer(ephemeral=True)
-        deleted = await inter.channel.purge(limit=количество)
-        embed = discord.Embed(description=f"🧹 Удалено **{len(deleted)}** сообщений.", color=discord.Color.blurple())
-        await inter.followup.send(embed=embed)
-        log_embed = discord.Embed(title="🧹 Очистка сообщений", color=discord.Color.blurple(),
-                                  timestamp=datetime.datetime.now())
-        log_embed.add_field(name="Канал", value=inter.channel.mention, inline=False)
+        deleted = await inter.channel.purge(limit=количество)  # type: ignore
+        await inter.followup.send(
+            embed=discord.Embed(
+                description=f"🧹 Удалено **{len(deleted)}** сообщений.",
+                color=discord.Color.blurple()
+            )
+        )
+        await self._send_public_alert(
+            f"🧹 {inter.user.mention} очистил {len(deleted)} сообщений в {inter.channel.mention}."
+        )
+        log_embed = discord.Embed(
+            title="🧹 Очистка сообщений",
+            color=discord.Color.blurple(),
+            timestamp=discord.utils.utcnow()
+        )
+        log_embed.add_field(name="Канал", value=inter.channel.mention, inline=False)  # type: ignore
         log_embed.add_field(name="Модератор", value=f"{inter.user.mention} (`{inter.user.id}`)", inline=False)
         log_embed.add_field(name="Количество", value=f"{len(deleted)}", inline=False)
         await self._send_log(log_embed)
 
 
-async def setup(bot):
+async def setup(bot: commands.Bot):
     await bot.add_cog(Moderation(bot))

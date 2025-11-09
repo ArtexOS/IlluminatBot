@@ -10,13 +10,15 @@ MEMBER_ROLE_ID = 1405996768876822539  # ID роли, которую бот вы�
 
 logger = logging.getLogger(__name__)
 
+
 class VerificationModal(discord.ui.Modal):
     def __init__(self, correct_number: int):
         super().__init__(title="Проверка")
         self.correct_number = correct_number
 
         self.code_input = TextInput(
-            label=f"Введите {self.correct_number}",
+            label="Введите 4-значный код",
+            placeholder=f"Например: {self.correct_number}",
             style=discord.TextStyle.short,
             min_length=4,
             max_length=4,
@@ -27,6 +29,7 @@ class VerificationModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             user_input = self.code_input.value.strip()
+
             if not user_input.isdigit():
                 await interaction.response.send_message("❌ Код должен состоять только из цифр.", ephemeral=True)
                 return
@@ -38,7 +41,9 @@ class VerificationModal(discord.ui.Modal):
                     await interaction.response.send_message("✅ Проверка пройдена! Роль выдана.", ephemeral=True)
                     logger.info(f"{interaction.user} успешно прошёл проверку.")
                 else:
-                    await interaction.response.send_message("⚠️ Роль не найдена. Обратитесь к администратору.", ephemeral=True)
+                    await interaction.response.send_message(
+                        "⚠️ Роль для проверки не найдена. Обратитесь к администратору.", ephemeral=True
+                    )
                     logger.error(f"Роль с ID {MEMBER_ROLE_ID} не найдена.")
             else:
                 await interaction.response.send_message("❌ Неверный код. Попробуйте ещё раз.", ephemeral=True)
@@ -46,7 +51,8 @@ class VerificationModal(discord.ui.Modal):
 
         except Exception as e:
             logger.error(f"Ошибка в модалке проверки: {e}", exc_info=True)
-            await interaction.response.send_message("⚡ Произошла ошибка. Попробуйте позже.", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("⚡ Произошла ошибка. Попробуйте позже.", ephemeral=True)
 
 
 class VerifyView(View):
@@ -71,7 +77,7 @@ class VerifyView(View):
             await interaction.response.send_modal(modal)
 
         except Exception as e:
-            logger.error(f"Ошибка при проверке: {e}", exc_info=True)
+            logger.error(f"Ошибка при попытке проверки: {e}", exc_info=True)
             if not interaction.response.is_done():
                 await interaction.response.send_message("⚡ Ошибка. Попробуйте позже.", ephemeral=True)
 
@@ -84,9 +90,11 @@ class Verify(commands.Cog):
     @app_commands.command(name="отправить-проверку", description="Отправить сообщение с кнопкой проверки.")
     @app_commands.default_permissions(administrator=True)
     async def send_verify_message(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True)
+
         embed = discord.Embed(
             description="Чтобы получить доступ к серверу, нажмите кнопку ниже и введите проверочный код.",
-            color=0x292b2f
+            color=0x2b2d31
         )
         embed.set_footer(text="Если что-то не работает — обратитесь к администратору.")
 
@@ -95,10 +103,14 @@ class Verify(commands.Cog):
             embed.set_image(url="attachment://verify.png")
             await inter.channel.send(embed=embed, view=VerifyView(), file=file)
         except FileNotFoundError:
-            logger.warning("Файл images/verify.png не найден, отправка без изображения.")
+            logger.warning("⚠️ Файл images/verify.png не найден, отправка без изображения.")
             await inter.channel.send(embed=embed, view=VerifyView())
+        except Exception as e:
+            logger.error(f"Ошибка при отправке сообщения проверки: {e}", exc_info=True)
+            await inter.followup.send("❌ Не удалось отправить сообщение проверки.", ephemeral=True)
+            return
 
-        await inter.response.send_message("✅ Сообщение для проверки отправлено.", ephemeral=True)
+        await inter.followup.send("✅ Сообщение для проверки успешно отправлено.", ephemeral=True)
         logger.info(f"Сообщение проверки отправлено в {inter.channel.name} пользователем {inter.user}.")
 
 
